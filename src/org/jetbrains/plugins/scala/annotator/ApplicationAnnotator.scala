@@ -5,7 +5,7 @@ import com.intellij.codeInspection.ProblemHighlightType
 import com.intellij.lang.annotation.{Annotation, AnnotationHolder}
 import com.intellij.psi.{PsiElement, PsiMethod, PsiNamedElement, PsiParameter}
 import org.jetbrains.plugins.scala.annotator.createFromUsage._
-import org.jetbrains.plugins.scala.annotator.quickfix.ReportHighlightingErrorQuickFix
+import org.jetbrains.plugins.scala.annotator.quickfix.{MinimizeCodeQuickFix, ReportHighlightingErrorQuickFix}
 import org.jetbrains.plugins.scala.codeInspection.varCouldBeValInspection.ValToVarQuickFix
 import org.jetbrains.plugins.scala.extensions._
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiUtil
@@ -90,6 +90,7 @@ trait ApplicationAnnotator {
                         val message = ScalaBundle.message("type.mismatch.expected.actual", expectedText, actualText)
                         val annotation = holder.createErrorAnnotation(expression, message)
                         annotation.registerFix(ReportHighlightingErrorQuickFix)
+                        annotation.registerFix(new MinimizeCodeQuickFix(expression))
                         addCreateFromUsagesQuickFixes(reference, holder)
                       }
                     else {
@@ -205,6 +206,7 @@ trait ApplicationAnnotator {
           val message = ScalaBundle.message("type.mismatch.expected.actual", expectedText, actualText)
           val annotation = holder.createErrorAnnotation(expression, message)
           annotation.registerFix(ReportHighlightingErrorQuickFix)
+          annotation.registerFix(new MinimizeCodeQuickFix(expression))
         }
       case MissedValueParameter(_) => // simultaneously handled above
       case UnresolvedParameter(_) => // don't show function inapplicability, unresolved

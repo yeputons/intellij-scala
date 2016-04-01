@@ -3,7 +3,7 @@ package annotator
 
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.psi.{PsiClass, PsiField, PsiMethod}
-import org.jetbrains.plugins.scala.annotator.quickfix.ReportHighlightingErrorQuickFix
+import org.jetbrains.plugins.scala.annotator.quickfix.{MinimizeCodeQuickFix, ReportHighlightingErrorQuickFix}
 import org.jetbrains.plugins.scala.codeInspection.varCouldBeValInspection.ValToVarQuickFix
 import org.jetbrains.plugins.scala.extensions._
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiUtil
@@ -38,6 +38,7 @@ trait AssignmentAnnotator {
                       val message = ScalaBundle.message("type.mismatch.expected.actual", expectedText, actualText)
                       val annotation = holder.createErrorAnnotation(expression, message)
                       annotation.registerFix(ReportHighlightingErrorQuickFix)
+                      annotation.registerFix(new MinimizeCodeQuickFix(expression))
                     }
                   }
                 }
@@ -66,6 +67,7 @@ trait AssignmentAnnotator {
                             val message = ScalaBundle.message("type.mismatch.expected.actual", expectedText, actualText)
                             val annotation = holder.createErrorAnnotation(expression, message)
                             annotation.registerFix(ReportHighlightingErrorQuickFix)
+                            annotation.registerFix(new MinimizeCodeQuickFix(expression))
                           }
                         else {
                           //TODO investigate case when expression is null. It's possible when new Expression(ScType)

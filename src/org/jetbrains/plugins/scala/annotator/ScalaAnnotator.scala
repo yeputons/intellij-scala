@@ -606,6 +606,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
         annotation.setHighlightType(ProblemHighlightType.LIKE_UNKNOWN_SYMBOL)
         registerAddImportFix(refElement, annotation, fixes: _*)
         annotation.registerFix(ReportHighlightingErrorQuickFix)
+        annotation.registerFix(new MinimizeCodeQuickFix(refElement))
         registerCreateFromUsageFixesFor(refElement, annotation)
       }
     }
@@ -703,6 +704,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
           val annotation = holder.createErrorAnnotation(refElement.nameId, error)
           annotation.setHighlightType(ProblemHighlightType.GENERIC_ERROR)
           annotation.registerFix(ReportHighlightingErrorQuickFix)
+          annotation.registerFix(new MinimizeCodeQuickFix(refElement))
           refWithoutArgs match {
             case ResolvesTo(obj: ScObject) => annotation.registerFix(fix(obj))
             case InstanceOfClass(td: ScTypeDefinition) => annotation.registerFix(fix(td))
@@ -729,6 +731,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
       val annotation = holder.createErrorAnnotation(refElement.nameId, error)
       annotation.setHighlightType(ProblemHighlightType.LIKE_UNKNOWN_SYMBOL)
       annotation.registerFix(ReportHighlightingErrorQuickFix)
+      annotation.registerFix(new MinimizeCodeQuickFix(refElement))
       registerCreateFromUsageFixesFor(refElement, annotation)
     }
   }
@@ -794,6 +797,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
       val annotation = holder.createErrorAnnotation(refElement.nameId, error)
       annotation.setHighlightType(ProblemHighlightType.LIKE_UNKNOWN_SYMBOL)
       annotation.registerFix(ReportHighlightingErrorQuickFix)
+      annotation.registerFix(new MinimizeCodeQuickFix(refElement))
       registerCreateFromUsageFixesFor(refElement, annotation)
     }
   }
