@@ -1039,7 +1039,7 @@ object ScalaPsiElementFactory {
     val dummyFile = PsiFileFactory.getInstance(manager.getProject).
             createFileFromText(DUMMY + ScalaFileType.SCALA_FILE_TYPE.getDefaultExtension,
       ScalaFileType.SCALA_FILE_TYPE, "val x = 0").asInstanceOf[ScalaFile]
-    dummyFile.findChildrenByType(ScalaTokenTypes.tASSIGN).head
+    dummyFile.getFirstChild.asInstanceOf[ScalaPsiElement].findChildrenByType(ScalaTokenTypes.tASSIGN).head
   }
 
   def createWhitespace(manager: PsiManager): PsiElement = {
