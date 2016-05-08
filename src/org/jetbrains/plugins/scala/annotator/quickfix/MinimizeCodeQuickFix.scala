@@ -8,6 +8,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi._
 import com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.plugins.scala.codeInsight.intention.types.AddOrRemoveStrategy
+import org.jetbrains.plugins.scala.extensions._
 import org.jetbrains.plugins.scala.debugger.evaluation.ScalaCodeFragment
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiElement
 import org.jetbrains.plugins.scala.lang.psi.api.ScalaRecursiveElementVisitor
@@ -61,11 +62,8 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
               return
             }
             referencesUsed += reference
-            var current: PsiElement = reference
-            while (current != null && !shouldNotRemove.contains(current)) {
-              shouldNotRemove += current
-              current = current.getParent
-            }
+            val parentsToRemove = reference.parentsWithSelfInFile.takeWhile(!shouldNotRemove.contains(_))
+            shouldNotRemove ++= parentsToRemove
             reference match {
               case param: ScParameter =>
                 ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("param", ref.getManager), ref)
@@ -76,15 +74,13 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
               case pat: ScPattern =>
                 ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("pattern", ref.getManager), ref)
                 pat.add(ScalaPsiElementFactory.createBlockCommentFromText("used", pat.getManager))
-                pat.parentsInFile.filter(_.isInstanceOf[ScPatternDefinition]).take(1).foreach {
-                  case patDef: ScPatternDefinition =>
-                    decomposePatternDefinition(patDef) {
-                      case (patInDef, exprInDef) if pat eq patInDef =>
-                        exprInDef.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("init for " + pat.getName, pat.getManager), exprInDef.firstChild.get)
-                        visitPrerequisites(exprInDef)
-                    }
-                  case _ =>
-                }
+                pat.parentsInFile.collect { case pat: ScPatternDefinition => pat }.take(1).foreach(x =>
+                  decomposePatternDefinition(x) {
+                    case (patInDef, exprInDef) if pat eq patInDef =>
+                      exprInDef.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("init for " + pat.getName, pat.getManager), exprInDef.firstChild.get)
+                      visitPrerequisites(exprInDef)
+                  }
+                )
               case _ =>
             }
           })
@@ -92,7 +88,7 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
         }
       })
     }
-    val startingElement = rootElement.parentsInFile.find(_.isInstanceOf[ScBlockExpr]).map(_.asInstanceOf[ScBlockExpr])
+    val startingElement = rootElement.parentsInFile.collect { case expr: ScBlockExpr => expr }
     startingElement.foreach(e => {
       e.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("startingElement", e.getManager), e.firstChild.get)
       visitPrerequisites(e)
@@ -134,11 +130,11 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
 
       override def visitExpression(expr: ScExpression): Unit = {
         if (!shouldNotRemove.contains(expr)) {
-          if (expr.parent.exists({
+          if (expr.parent.exists {
             case _: ScTemplateBody => true
             case _: ScBlock => true
             case _ => false
-          })) {
+          }) {
             expr.delete()
           }
         }
@@ -244,9 +240,9 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
   def addAutoInferredComment(binding: ScBindingPattern): Unit = {
     // During PSI-tree modification type element can be already added but not embedded into ScReferencePattern
     // and therefore it can be not ScTypedPattern
-    val anchor = binding match {
+    val anchor: Option[PsiElement] = binding match { // specify type here explicitly because of highlighting bug
       case typed: ScTypedPattern => typed.typePattern
-      case _ => binding.nextSiblings.filter(_.isInstanceOf[ScTypeElement]).find(_ => true)
+      case _ => binding.nextSiblings.collectFirst { case elem: ScTypeElement => elem }
     }
     if (anchor.isDefined) {
       addAutoInferredComment(binding, anchor.get)
