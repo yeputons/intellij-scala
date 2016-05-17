@@ -6,10 +6,10 @@ import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.psi._
-import com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.plugins.scala.codeInsight.intention.types.AddOrRemoveStrategy
 import org.jetbrains.plugins.scala.extensions._
 import org.jetbrains.plugins.scala.debugger.evaluation.ScalaCodeFragment
+import org.jetbrains.plugins.scala.lang.lexer.ScalaTokenTypes
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiElement
 import org.jetbrains.plugins.scala.lang.psi.api.ScalaRecursiveElementVisitor
 import org.jetbrains.plugins.scala.lang.psi.api.base.patterns._
@@ -19,6 +19,8 @@ import org.jetbrains.plugins.scala.lang.psi.api.statements.params.{ScClassParame
 import org.jetbrains.plugins.scala.lang.psi.api.statements.{ScFunctionDeclaration, ScFunctionDefinition, ScPatternDefinition, ScVariableDefinition}
 import org.jetbrains.plugins.scala.lang.psi.api.toplevel.templates.ScTemplateBody
 import org.jetbrains.plugins.scala.lang.psi.impl.ScalaPsiElementFactory
+import org.jetbrains.plugins.scala.lang.psi.impl.base.patterns.ScTypedPatternImpl
+import org.jetbrains.plugins.scala.lang.psi.types.result.TypingContext
 import org.jetbrains.plugins.scala.lang.psi.types.{Any => AnyType, Nothing => NothingType, Unit => UnitType}
 
 import scala.collection.mutable
@@ -38,22 +40,25 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
 
   def getFamilyName: String = ScalaBundle.message("minimize.code.fix")
 
+  val debugComments: Boolean = false
+  val removeFunctions: Boolean = false
+
   def invoke(project: Project, editor: Editor, file: PsiFile): Unit = {
-    file.accept(getExprErasureVisitor(false))
+    eraseTypedImplementations(file, autoInferTypes = false)
 
     val referencesUsed = mutable.Set.empty[PsiNamedElement]
     val shouldNotRemove = mutable.Set.empty[PsiElement]
-    def visitPrerequisites(expr: ScExpression): Unit = {
+    def visitPrerequisites(expr: ScalaPsiElement): Unit = {
       expr.accept(new ScalaRecursiveElementVisitor() {
         override def visitElement(element: ScalaPsiElement): Unit = {
-          shouldNotRemove += element
+          val parentsToRemove = element.parentsWithSelfInFile.takeWhile(!shouldNotRemove.contains(_))
+          shouldNotRemove ++= parentsToRemove
           super.visitElement(element)
         }
 
         override def visitReferenceExpression(ref: ScReferenceExpression): Unit = {
           ref.bind().map(_.getElement).foreach(reference => {
             if (referencesUsed.contains(reference)) {
-              ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("processed", ref.getManager), ref)
               super.visitReferenceExpression(ref)
               return
             }
@@ -66,21 +71,26 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
             shouldNotRemove ++= parentsToRemove
             reference match {
               case param: ScParameter =>
-                ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("param", ref.getManager), ref)
-                param.add(ScalaPsiElementFactory.createBlockCommentFromText("used", param.getManager))
+                if (debugComments) {
+                  ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("param", ref.getManager), ref)
+                  param.add(ScalaPsiElementFactory.createBlockCommentFromText("used", param.getManager))
+              }
               case _: ScFunctionDefinition | _: ScFunctionDeclaration =>
-                ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("func", ref.getManager), ref)
-                reference.add(ScalaPsiElementFactory.createBlockCommentFromText("used", reference.getManager))
+                if (debugComments) {
+                  ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("func", ref.getManager), ref)
+                  reference.add(ScalaPsiElementFactory.createBlockCommentFromText("used", reference.getManager))
+                }
               case pat: ScPattern =>
-                ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("pattern", ref.getManager), ref)
-                pat.add(ScalaPsiElementFactory.createBlockCommentFromText("used", pat.getManager))
-                pat.parentsInFile.collect { case pat: ScPatternDefinition => pat }.take(1).foreach(x =>
-                  decomposePatternDefinition(x) {
-                    case (patInDef, exprInDef) if pat eq patInDef =>
-                      exprInDef.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("init for " + pat.getName, pat.getManager), exprInDef.firstChild.get)
-                      visitPrerequisites(exprInDef)
+                if (debugComments) {
+                  ref.getParent.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("pattern", ref.getManager), ref)
+                  pat.add(ScalaPsiElementFactory.createBlockCommentFromText("used", pat.getManager))
+                }
+                pat.parentsInFile.collect { case pat: ScPatternDefinition => pat }.take(1).foreach(patDef => {
+                  if (debugComments) {
+                    patDef.addAfter(ScalaPsiElementFactory.createBlockCommentFromText("init for " + pat.getName, pat.getManager), patDef.findFirstChildByType(ScalaTokenTypes.tASSIGN))
                   }
-                )
+                  patDef.expr.foreach(visitPrerequisites(_))
+                })
               case _ =>
             }
           })
@@ -88,9 +98,11 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
         }
       })
     }
-    val startingElement = rootElement.parentsInFile.collect { case expr: ScBlockExpr => expr }
+    val startingElement = rootElement.parentsInFile.collect { case expr: ScBlockStatement => expr }.take(1)
     startingElement.foreach(e => {
-      e.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("startingElement", e.getManager), e.firstChild.get)
+      if (debugComments) {
+        e.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("startingElement", e.getManager), e.firstChild.get)
+      }
       visitPrerequisites(e)
     })
     shouldNotRemove ++= rootElement.parents
@@ -114,16 +126,22 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
     file.accept(new ScalaRecursiveElementVisitor() {
       override def visitFunctionDefinition(fun: ScFunctionDefinition): Unit = {
         if (!shouldNotRemove.contains(fun)) {
-          //fun.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("unused", fun.getManager), fun.paramClauses)
-          fun.delete()
+          if (removeFunctions) {
+            fun.delete()
+          } else if (debugComments) {
+            fun.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("unused", fun.getManager), fun.paramClauses)
+          }
         }
         super.visitFunctionDefinition(fun)
       }
 
       override def visitFunctionDeclaration(fun: ScFunctionDeclaration): Unit = {
         if (!shouldNotRemove.contains(fun)) {
-          //fun.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("unused", fun.getManager), fun.paramClauses)
-          fun.delete()
+          if (removeFunctions) {
+            fun.delete()
+          } else if (debugComments) {
+            fun.addBefore(ScalaPsiElementFactory.createBlockCommentFromText("unused", fun.getManager), fun.paramClauses)
+          }
         }
         super.visitFunctionDeclaration(fun)
       }
@@ -135,7 +153,10 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
             case _: ScBlock => true
             case _ => false
           }) {
-            expr.delete()
+            expr.replaceExpression(
+              ScalaPsiElementFactory.createExpressionWithContextFromText("???", expr.getContext, expr),
+              removeParenthesis = true
+            )
           }
         }
         super.visitExpression(expr)
@@ -143,26 +164,29 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
 
       override def visitPatternDefinition(patDef: ScPatternDefinition): Unit = {
         if (!patDef.hasModifierPropertyScala("implicit")) {
-          decomposePatternDefinition(patDef) {
-            case (pat: ScReferencePattern, expr) =>
-              if (!shouldNotRemove.contains(pat) && !shouldNotRemove.contains(expr)) {
-                pat.replace(ScalaPsiElementFactory.createWildcardPattern(pat.getManager))
-                expr.replaceExpression(
-                  ScalaPsiElementFactory.createExpressionWithContextFromText("???", expr.getContext, expr),
-                  removeParenthesis = true)
-              }
-            case _ =>
+          if (!shouldNotRemove.contains(patDef) && !patDef.expr.exists(shouldNotRemove.contains(_))) {
+            patDef.delete()
           }
         }
         super.visitPatternDefinition(patDef)
       }
     })
 
+    file.accept(new ScalaRecursiveElementVisitor() {
+      override def visitReferenceExpression(ref: ScReferenceExpression): Unit = {
+        if (ref.getReference.refName == "???") {
+          if (ref.nextSiblings.exists(_.isInstanceOf[ScExpression])) {
+            ref.delete()
+          }
+        }
+        super.visitReferenceExpression(ref)
+      }
+    })
     //file.accept(getExprErasureVisitor(true))
   }
 
-  def getExprErasureVisitor(autoInferTypes: Boolean): ScalaRecursiveElementVisitor =
-    new ScalaRecursiveElementVisitor {
+  def eraseTypedImplementations(file: PsiFile, autoInferTypes: Boolean): Unit =
+    file.accept(new ScalaRecursiveElementVisitor {
       override def visitFunctionDefinition(fun: ScFunctionDefinition): Unit = {
         if (!fun.isAncestorOf(rootElement)) {
           if (autoInferTypes && !fun.hasExplicitType) {
@@ -190,14 +214,15 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
           // We should not replace expressions with ??? as we go because it may break type inferrence.
           // E.g. if we replace expression in `val x, y = 5` after seeing `x` type for `y` will be impossible to infer.
           val exprsToReplace = mutable.Set.empty[ScExpression]
-          decomposePatternDefinition(patDef) {
-            case (_: ScTypedPattern, expr) =>
-              exprsToReplace += expr
-            case (p: ScReferencePattern, expr) =>
-              if (p.expectedType.isDefined && autoInferTypes && !p.expectedType.contains(AnyType) && !p.expectedType.contains(NothingType)) {
-                AddOrRemoveStrategy.addToPattern(p)
-                addAutoInferredComment(p)
-                exprsToReplace += expr
+          patDef.typeElement match {
+            case Some(_) =>
+              exprsToReplace ++= patDef.expr
+            case None if autoInferTypes =>
+              val expectedType = patDef.getType(TypingContext.empty).getOrNothing
+              if (expectedType != AnyType && expectedType != NothingType) {
+                AddOrRemoveStrategy.addToValue(patDef)
+                addAutoInferredComment(patDef)
+                exprsToReplace ++= patDef.expr
               }
             case _ =>
           }
@@ -205,48 +230,14 @@ class MinimizeCodeQuickFix(rootElement: ScalaPsiElement) extends IntentionAction
         }
         super.visitPatternDefinition(patDef)
       }
-    }
-
-  def decomposePatternDefinition(patDef: ScPatternDefinition)(visitor: (ScPattern, ScExpression) => Unit): Unit = {
-    if (patDef.expr.isEmpty) {
-      return
-    }
-    for (pattern <- patDef.pList.patterns) {
-      decomposePatternAssignment(pattern, patDef.expr.get)(visitor)
-    }
-  }
-
-  def decomposePatternAssignment(pattern: ScPattern, expr: ScExpression)(visitor: (ScPattern, ScExpression) => Unit): Unit = {
-    visitor(pattern, expr)
-    (pattern, expr) match {
-      case (patTuple: ScTuplePattern, exprTuple: ScTuple)
-        if patTuple.subpatterns.length == exprTuple.exprs.length
-      =>
-        for ((childPattern, childExpr) <- patTuple.subpatterns.zip(exprTuple.exprs)) {
-          decomposePatternAssignment(childPattern, childExpr)(visitor)
-        }
-      case _ =>
-    }
-  }
+    })
 
   def addAutoInferredComment(fun: ScFunctionDefinition): Unit = {
-    fun.returnTypeElement match {
-      case Some(anchor) =>
-        addAutoInferredComment(fun, anchor)
-      case None =>
-    }
+    fun.returnTypeElement.foreach(addAutoInferredComment(fun, _))
   }
 
-  def addAutoInferredComment(binding: ScBindingPattern): Unit = {
-    // During PSI-tree modification type element can be already added but not embedded into ScReferencePattern
-    // and therefore it can be not ScTypedPattern
-    val anchor: Option[PsiElement] = binding match { // specify type here explicitly because of highlighting bug
-      case typed: ScTypedPattern => typed.typePattern
-      case _ => binding.nextSiblings.collectFirst { case elem: ScTypeElement => elem }
-    }
-    if (anchor.isDefined) {
-      addAutoInferredComment(binding, anchor.get)
-    }
+  def addAutoInferredComment(patDef: ScPatternDefinition): Unit = {
+    patDef.typeElement.foreach(addAutoInferredComment(patDef, _))
   }
 
   def addAutoInferredComment(element: PsiElement, addAfter: PsiElement): Unit = {
