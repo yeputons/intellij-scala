@@ -502,6 +502,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
                         val error = ScalaBundle.message("expr.type.does.not.conform.expected.type", retTypeText, expectedTypeText)
                         val annotation: Annotation = holder.createErrorAnnotation(expr, error)
                         annotation.setHighlightType(ProblemHighlightType.GENERIC_ERROR_OR_WARNING)
+                        annotation.registerFix(new MinimizeCodeQuickFix(expr))
                         typeElement match {
                           //Don't highlight te if it's outside of original file.
                           case Some(te) if te.containingFile == t.containingFile =>
@@ -959,6 +960,7 @@ class ScalaAnnotator extends Annotator with FunctionAnnotator with ScopeAnnotato
                   if (AddBreakoutQuickFix.isAvailable(expr)) {
                     annotation.registerFix(new AddBreakoutQuickFix(expr))
                   }
+                  annotation.registerFix(new MinimizeCodeQuickFix(expr))
                   typeElement match {
                     case Some(te) if te.getContainingFile == expr.getContainingFile =>
                       val fix = new ChangeTypeFix(te, exprType.getOrNothing)
